@@ -34,7 +34,7 @@ def words_in_common(words1, words2):
     return sum
 
 def edit_dist_less_two(words1, words2):
-    sum1 = 0
+    sum = 0
     for word1 in words1:
         for word2 in words2:
             if len(word1) > 5 and len(word2) > 5 and editdistance.eval(word1, word2) <= 2:
@@ -54,6 +54,8 @@ def generate_features(raw_train):
         title_stemmed = [stemmer.stem(word) for word in row['product_title'].split()]
         data_point.append(words_in_common(search_stemmed, title_stemmed))
         data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]))
+        data_point.append(words_in_common(title_stemmed, search_stemmed))
+        data_point.append(words_in_common(descr_dict[pd_id], search_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, title_stemmed))
         X.append(data_point)
     X = numpy.array(X)
