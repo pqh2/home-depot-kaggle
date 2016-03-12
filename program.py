@@ -4,6 +4,7 @@ import gzip
 import numpy as np
 ###
 
+from sklearn.grid_search import GridSearchCV
 from sklearn.ensemble import BaggingRegressor
 from keras.layers.advanced_activations import PReLU, LeakyReLU
 from keras.layers.core import Dense, Dropout, Activation
@@ -40,11 +41,15 @@ def words_in_common(words1, words2):
     sum = 0
     dct = set()
     for word1 in words1:
+        if word1 == 'in.':
+            word1 = 'inch'
         for word2 in words2:
+            if word1 == 'in.':
+                word2 = 'inch'
             if word1 not in dct and word2 not in dct and word2.find(word1) >= 0:
                 dct.add(word1)
                 dct.add(word2)
-                sum +=1
+                sum += 1
     return sum
 
 def edit_dist_less_two(words1, words2):
@@ -56,6 +61,19 @@ def edit_dist_less_two(words1, words2):
                 break
     return sum
 
+def weighted_count(words1, words2):
+    dct = {}
+    for word in words2:
+        if word in dct:
+            dct[word] += 1
+        else:
+            dct[word] = 1
+    sm = 0
+    for word in words1:
+        if word in dct:
+            sm += math.log(dct[word])
+    return sm
+
 
 def generate_features(raw_train):
     X = []
@@ -64,15 +82,17 @@ def generate_features(raw_train):
         data_point = []
         pd_id = row['product_uid']
         data_point.append(len(row['search_term']))
-        search_stemmed = [stemmer.stem(word) for word in row['search_term'].split() if stemmer.stem(word)]
-        title_stemmed = [stemmer.stem(word) for word in row['product_title'].split() if stemmer.stem(word)]
+        data_point.append(len(row['product_title']))
+        search_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['search_term'].split() if stemmer.stem(word)]
+        search_stemmed = ['in.' if w == 'inch' else w for w in search_stemmed]
+        search_stemmed = ['ft.' if w == 'feet' else w for w in search_stemmed]
+        title_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_title'].split() if stemmer.stem(word)]
         data_point.append(words_in_common(search_stemmed, title_stemmed))
         data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]))
-        data_point.append(words_in_common(title_stemmed, search_stemmed))
-        data_point.append(words_in_common(descr_dict[pd_id], search_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, title_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, descr_dict[pd_id]))
-
+        data_point.append(1 if search_stemmed[-1] in title_stemmed else 0)
+        data_point.append(weighted_count(search_stemmed, descr_dict[pd_id]))
         search_joined = "".join([word for word in search_stemmed])
         title_joined = "".join([word for word in title_stemmed])
         data_point.append(len(search_stemmed) if (title_joined.find(search_joined) >= 0 and len(search_stemmed) > 1) else 0)
@@ -90,6 +110,9 @@ def add_to_dict(raw_data):
             else:
                 ids_have_word[word] = {pd_id: True}
 
+
+
+
 raw_train = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/train.csv", encoding="ISO-8859-1")
 descriptions_raw = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/product_descriptions.csv", encoding="ISO-8859-1")
 raw_test = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/test.csv", encoding="ISO-8859-1")
@@ -101,7 +124,7 @@ descr_dict = {}
 descr_len = {}
 # Stem descriptions
 for it, row in descriptions_raw.iterrows():
-    descr_dict[row['product_uid']] = [stemmer.stem(word) for word in row['product_description'].split()]
+    descr_dict[row['product_uid']] = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
 
 X = generate_features(raw_train)
 Xtest = generate_features(raw_test)
@@ -126,27 +149,37 @@ def build_model(input_dim, hn=64, dp=0.5, layers=1):
     model.compile(loss='mse', optimizer='adam')
     return model
 
-model = build_model(len(X[0]), 48, 0.25, 1)
+
+model = build_model(len(X[0]), 48, 0.35, 1)
 model.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 #rfc = RandomForestRegressor(n_estimators=100, min_samples_split=10)
 #rfc.fit(X, Y)
 
 
 # Classifier
-params = {'eta': 0.1,
-          'max_depth': 5,
-          'subsample': 0.75,
-          'colsample_bytree': 0.75,
-          "booster": "gbtree",
-          'objective': 'reg:linear'}
-num_boost_round = 200
+model2 = xgb.XGBRegressor()
+params = {
+        'n_estimators': [100, 150, 250],
+        'learning_rate': [0.05, 0.1, 0.3],
+        'max_depth': [3, 6, 9, 12],
+        'subsample': [0.25, 0.35, 0.5, 0.7],
+        'colsample_bytree': [0.3, 0.5, 0.75, 0.9]}
+
+clf1 = GridSearchCV(model2, params, verbose=1)
+clf1.fit(X, Y)
+print(clf1.best_score_)
+print(clf1.best_params_)
+
+num_boost_round = 112
 dtrain = xgb.DMatrix(X, Y)
+#clf1 = xgb.cv(params=params, dtrain=dtrain, num_boost_round=num_boost_round, early_stopping_rounds=10, nfold=5)
 clf1 = xgb.train(params=params, dtrain=dtrain, num_boost_round=num_boost_round)
 #clf1.predict(xgb.DMatrix(X))
 math.sqrt(mean_squared_error(Y[60000:], clf1.predict(xgb.DMatrix(X[60000:]))))
 
 Ypred = [max(1, min(3, y)) for y in clf1.predict(xgb.DMatrix(Xtest))]
 Ypred = numpy.add(Ypred, [y[0] for y in model.predict(Xtest)])
+Ypred /= 2
 id_test = raw_test['id']
 pandas.DataFrame({"id": id_test, "relevance": Ypred}).to_csv('submission.csv',index=False)
 
