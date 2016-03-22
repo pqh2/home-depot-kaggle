@@ -37,7 +37,6 @@ stemmer = SnowballStemmer('english')
 word_set = set([stemmer.stem(word) for word in words.words()])
 ids_have_word = {}
 documents_its_in = {}
-
 num_documents = 0
 
 def words_in_common(words1, words2):
@@ -59,20 +58,6 @@ def edit_dist_less_two(words1, words2):
                 sum += 1
                 break
     return sum
-
-def weighted_count(words1, words2):
-    dct = {}
-    for word in words2:
-        if word in dct:
-            dct[word] += 1
-        else:
-            dct[word] = 1
-    sm = 0
-    for word in words1:
-        if word in dct:
-            sm += math.log(dct[word])
-    return sm
-
 
 def generate_features(raw_train):
     X = []
@@ -102,40 +87,28 @@ def generate_features(raw_train):
     X = numpy.array(X)
     return X
 
-def add_to_dict(raw_data):
-    for it, row in raw_data.iterrows():
-        stemmed_words = [stemmer.stem(word) for word in row['product_title'].split()if stemmer.stem(word) not in stopwords]
-        pd_id = row['product_uid']
-        for word in stemmed_words:
-            if word in ids_have_word:
-                ids_have_word[word][pd_id] = True
-            else:
-                ids_have_word[word] = {pd_id: True}
-
-
-
 
 raw_train = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/train.csv", encoding="ISO-8859-1")
 descriptions_raw = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/product_descriptions.csv", encoding="ISO-8859-1")
 raw_test = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/test.csv", encoding="ISO-8859-1")
-add_to_dict(raw_test)
-add_to_dict(raw_train)
-
 
 descr_dict = {}
-descr_len = {}
+
 # Stem descriptions
 for it, row in descriptions_raw.iterrows():
     words = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
     descr_dict[row['product_uid']] = words
     x = set()
-    for w in words:
-        if w not in x:
-            if w in documents_its_in:
-                documents_its_in[w] += 1
+    for word in words:
+        word = 'inch' if word == 'in.' else word
+        word = 'ft' if (word == 'foot' or word == 'feet.') else word
+        word = 'lb' if  (word == 'pounds' or word == 'pound') else word
+        if word not in x:
+            if word in documents_its_in:
+                documents_its_in[word] += 1
             else:
-                documents_its_in[w] = 1
-        x.add(w)
+                documents_its_in[word] = 1
+        x.add(word)
 
     num_documents += 1
 
@@ -172,21 +145,21 @@ model.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 # Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [133, 134, 135, 136],
-        'learning_rate': [0.04],
-        'max_depth': [8],
+        'n_estimators': [145],
+        'learning_rate': [0.06],
+        'max_depth': [13],
         'subsample': [0.88],
-        'colsample_bylevel': [0.9, 0.92, 0.95],
-        'colsample_bytree': [0.78],
-         'min_child_weight': [3]}
+        'colsample_bylevel': [0.9],
+        'colsample_bytree': [0.75],
+         'min_child_weight': [3] }
 
 clf1 = GridSearchCV(model2, params, verbose=1, n_jobs=8, cv=7)
 clf1.fit(X, Y)
 print(clf1.best_score_)
 print(clf1.best_params_)
 
-best_params = {'subsample': 0.7, 'learning_rate': 0.05, 'colsample_bytree': 0.75, 'max_depth': 9}
-
+# best actual {'colsample_bytree': 0.78, 'colsample_bylevel': 0.9, 'learning_rate': 0.05, 'min_child_weight': 3, 'n_estimators': 136, 'subsample': 0.88, 'max_depth': 9}
+best_params = {'colsample_bytree': 0.78, 'colsample_bylevel': 0.9, 'learning_rate': 0.05, 'min_child_weight': 3, 'n_estimators': 136, 'subsample': 0.88, 'max_depth': 9}
 num_boost_round = 120
 dtrain = xgb.DMatrix(X, Y)
 #clf1 = xgb.cv(params=best_params, dtrain=dtrain, num_boost_round=num_boost_round, early_stopping_rounds=10, nfold=5)
@@ -195,6 +168,7 @@ clf2 = xgb.train(params=params, dtrain=dtrain, num_boost_round=num_boost_round)
 math.sqrt(mean_squared_error(Y[60000:], clf1.predict(xgb.DMatrix(X[60000:]))))
 
 Ypred = [0.7 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
-Ypred = numpy.add(Ypred, [y[0] * 0.3 for y in model.predict(Xtest)])
+Ypred = numpy.add(Ypred, [min(3, y[0]) * 0.3 for y in model.predict(Xtest)])
+Ypred = [min(3, y) for y in Ypred]
 id_test = raw_test['id']
 pandas.DataFrame({"id": id_test, "relevance": Ypred}).to_csv('submission.csv',index=False)
