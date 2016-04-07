@@ -54,7 +54,7 @@ def words_in_common(words1, words2):
                 else:
                     dct[word1] = 1
     for word1 in dct:
-        sum += (1 + dct[word1]) * (math.log(num_documents / documents_its_in[word1]))
+        sum += 1 * (math.log(num_documents / documents_its_in[word1]))
     return sum
 
 def edit_dist_less_two(words1, words2):
@@ -76,7 +76,7 @@ def weighted_count(words1, words2):
     sm = 0
     for word in words1:
         if word in dct:
-            sm += math.log(dct[word])
+            sm += math.log(1 + dct[word])
     return sm
 
 
@@ -94,8 +94,8 @@ def generate_features(raw_train):
         title_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_title'].split() if stemmer.stem(word)]
         title_stemmed = ['in.' if w == 'inch' else w for w in title_stemmed]
         title_stemmed = ['ft.' if w == 'feet' else w for w in title_stemmed]
-        data_point.append(words_in_common(search_stemmed, title_stemmed))
-        data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]))
+        data_point.append(words_in_common(search_stemmed, title_stemmed) / len(search_stemmed))
+        data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]) / len(search_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, title_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, descr_dict[pd_id]))
         data_point.append(1 if search_stemmed[-1] in title_stemmed else 0)
@@ -167,33 +167,34 @@ model2.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 #rfc.fit(X, Y)
 
 
+
 # Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [175, 200, 225, 250, 275],
-        'learning_rate': [0.04, 0.05],
-        'max_depth': [10],
-         'subsample': [0.88],
-        'colsample_bylevel': [0.85, 0.9],
-        'colsample_bytree': [0.78]
+        'n_estimators': [350, 450, 550],
+        'learning_rate': [0.03, 0.05],
+        'max_depth': [9],
+         'subsample': [0.85, 0.9, 0.95],
+        'colsample_bylevel': [0.85, 0.9, 0.95],
+        'colsample_bytree': [0.75, 0.78, 0.81]
 }
-
-clf1 = GridSearchCV(model2, params, verbose=1, n_jobs=4)
+clf1 = GridSearchCV(model2, params, verbose=1, n_jobs=4, cv=7)
 clf1.fit(X, Y)
 print(clf1.best_score_)
 print(clf1.best_params_)
 
+
+# Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [100, 150, 175, 200, 225, 250, 275],
-        'learning_rate': [0.04, 0.05],
-        'max_depth': [9],
-         'subsample': [0.88],
-        'colsample_bylevel': [0.85, 0.9],
-        'colsample_bytree': [0.78]
+        'n_estimators': [350, 450, 550],
+        'learning_rate': [0.03, 0.05],
+        'max_depth': [8],
+         'subsample': [0.85, 0.9, 0.95],
+        'colsample_bylevel': [0.85, 0.9, 0.95],
+        'colsample_bytree': [0.75, 0.78, 0.81]
 }
-
-clf2 = GridSearchCV(model2, params, verbose=1, n_jobs=4)
+clf2 = GridSearchCV(model2, params, verbose=1, n_jobs=4, cv=7)
 clf2.fit(X, Y)
 print(clf2.best_score_)
 print(clf2.best_params_)
@@ -208,7 +209,7 @@ best_params = {'colsample_bytree': 0.78, 'colsample_bylevel': 0.9, 'learning_rat
 #clf1 = xgb.cv(params=params, dtrain=dtrain, num_boost_round=num_boost_round, early_stopping_rounds=10, nfold=5)
 clf1 = xgb.train(params=best_params, dtrain=dtrain, num_boost_round=num_boost_round)
 #clf1.predict(xgb.DMatrix(X))
-math.sqrt(mean_squared_error(Y[60000:], model1.predict(X[60000:])))
+math.sqrt(mean_squared_error(Y[60000:], clf1.predict(X[60000:])))
 
 Ypred = [0.35 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
 Ypred = numpy.add(Ypred, [0.35 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
@@ -224,7 +225,7 @@ Ypredtrain = clf1.predict(X)
 for i in  range(len(Ypredtrain)):
     diff.append(abs(Ypredtrain[i] - Y[i]))
 indexes = [i[0] for i in sorted(enumerate(diff), key=lambda x:x[1])]
-worst = indexes[len(indexes) - 1000:]
+worst = indexes[len(indexes) - 500:]
 worst_high = Y[worst] > 2.5
 worst_high_indexes = []
 for i, x in enumerate(worst):
