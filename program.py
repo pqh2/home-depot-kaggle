@@ -29,10 +29,10 @@ from nltk.corpus import stopwords
 import xgboost as xgb
 from sklearn.preprocessing import StandardScaler
 from nltk.corpus import words
-
-
+import gensim
 stopwords = set([word for word in stopwords.words('english')])
 stemmer = SnowballStemmer('english')
+wordToVec = gensim.models.Word2Vec.load_word2vec_format('/Users/patrickhess/Downloads/freebase-vectors-skipgram1000-en.bin', binary=True)
 
 word_set = set([stemmer.stem(word) for word in words.words()])
 documents_its_in = {}
@@ -43,18 +43,28 @@ def words_in_common(words1, words2):
     sum = 0
     dct = {}
     for word1 in words1:
-        if word1 == 'in.':
-            word1 = 'inch'
         for word2 in words2:
-            if word1 == 'in.':
-                word2 = 'inch'
-            if word2.find(word1) >= 0 and word1 in documents_its_in:
-                if word1 in dct:
-                    dct[word1] += 1
+            if word2.find(word1) >= 0:
+                if word1 in documents_its_in:
+                    if word1 in dct:
+                        dct[word1] += 1
+                    else:
+                        dct[word1] = 1
                 else:
-                    dct[word1] = 1
+                    sum += 1
     for word1 in dct:
         sum += 1 * (math.log(num_documents / documents_its_in[word1]))
+    return sum
+
+def word_to_vec_score(words1, words2):
+    sum = 0
+    for word1 in words1:
+        for word2 in words2:
+            mod1 = '/en/' + word1
+            mod2 = '/en/' + word2
+            if word2.find(word1) == 0 and mod1 in wordToVec.vocab and mod2 in wordToVec.vocab and wordToVec.similarity(mod1, mod2) > 0:
+                if word1 in documents_its_in:
+                    sum += wordToVec.similarity(mod1, mod2)**2 * (math.log(num_documents / documents_its_in[word1]))
     return sum
 
 def edit_dist_less_two(words1, words2):
@@ -83,6 +93,7 @@ def weighted_count(words1, words2):
 def generate_features(raw_train):
     X = []
     # Create features
+    nums_to_words = {}
     for it, row in raw_train.iterrows():
         data_point = []
         pd_id = row['product_uid']
@@ -91,9 +102,12 @@ def generate_features(raw_train):
         search_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['search_term'].split() if stemmer.stem(word)]
         search_stemmed = ['in.' if w == 'inch' else w for w in search_stemmed]
         search_stemmed = ['ft.' if w == 'feet' else w for w in search_stemmed]
+        #search_stemmed = ['lb.' if w == 'pound' else w for w in search_stemmed]
         title_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_title'].split() if stemmer.stem(word)]
         title_stemmed = ['in.' if w == 'inch' else w for w in title_stemmed]
         title_stemmed = ['ft.' if w == 'feet' else w for w in title_stemmed]
+        #title_stemmed = ['lb.' if w == 'pound' else w for w in title_stemmed]
+        data_point.append(word_to_vec_score(search_stemmed, title_stemmed) / len(search_stemmed))
         data_point.append(words_in_common(search_stemmed, title_stemmed) / len(search_stemmed))
         data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]) / len(search_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, title_stemmed))
@@ -116,6 +130,8 @@ raw_test = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/test.
 # Stem descriptions
 for it, row in descriptions_raw.iterrows():
     words = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
+    words = ['in.' if w == 'inch' else w for w in words]
+    words = ['ft.' if w == 'feet' else w for w in words]
     descr_dict[row['product_uid']] = words
     x = set()
     for w in words:
@@ -127,9 +143,6 @@ for it, row in descriptions_raw.iterrows():
         x.add(w)
     num_documents += 1
 
-
-descr_dict = {}
-descr_len = {}
 # Stem descriptions
 for it, row in descriptions_raw.iterrows():
     descr_dict[row['product_uid']] = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
@@ -167,18 +180,17 @@ model2.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 #rfc.fit(X, Y)
 
 
-
 # Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [350, 450, 550],
-        'learning_rate': [0.03, 0.05],
-        'max_depth': [9],
-         'subsample': [0.85, 0.9, 0.95],
-        'colsample_bylevel': [0.85, 0.9, 0.95],
-        'colsample_bytree': [0.75, 0.78, 0.81]
+        'n_estimators': [650, 675, 700],
+        'learning_rate': [0.04, 0.05],
+        'max_depth': [9, 10, 11],
+         'subsample': [0.8, 0.85, 0.9],
+        'colsample_bylevel': [0.65, 0.75, 0.8],
+        'colsample_bytree': [0.65, 0.7]
 }
-clf1 = GridSearchCV(model2, params, verbose=1, n_jobs=4, cv=7)
+clf1 = GridSearchCV(model2, params, verbose=1, n_jobs = 4, cv=7)
 clf1.fit(X, Y)
 print(clf1.best_score_)
 print(clf1.best_params_)
@@ -187,19 +199,40 @@ print(clf1.best_params_)
 # Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [350, 450, 550],
-        'learning_rate': [0.03, 0.05],
+        'n_estimators': [750, 800, 850],
+        'learning_rate': [0.05],
         'max_depth': [8],
-         'subsample': [0.85, 0.9, 0.95],
-        'colsample_bylevel': [0.85, 0.9, 0.95],
-        'colsample_bytree': [0.75, 0.78, 0.81]
+         'subsample': [0.75, 0.8],
+        'colsample_bylevel': [0.75, 0.8],
+        'colsample_bytree': [0.7]
 }
-clf2 = GridSearchCV(model2, params, verbose=1, n_jobs=4, cv=7)
+clf2 = GridSearchCV(model2, params, verbose=1, n_jobs = 4, cv=7)
 clf2.fit(X, Y)
 print(clf2.best_score_)
 print(clf2.best_params_)
 
 
+
+# Classifier
+model2 = xgb.XGBRegressor()
+params = {
+           'n_estimators': [350, 400, 450],
+        'learning_rate': [0.04, 0.05],
+        'max_depth': [10],
+         'subsample': [0.85, 0.9],
+        'colsample_bylevel': [0.8, 0.85],
+        'colsample_bytree': [0.65, 0.7]
+}
+clf3 = GridSearchCV(model2, params, verbose=1, n_jobs=4, cv=7)
+clf3.fit(X, Y)
+print(clf3.best_score_)
+print(clf3.best_params_)
+
+
+Xoutput = np.column_stack((model1.predict(X), clf1.predict(X), clf2.predict(X)))
+
+model2 = build_model(len(Xoutput[0]), 16, 0.85, 1, 'glorot_normal')
+model2.fit(Xoutput, Y, nb_epoch=32, batch_size=32, verbose=2)
 
 
 
@@ -211,10 +244,14 @@ clf1 = xgb.train(params=best_params, dtrain=dtrain, num_boost_round=num_boost_ro
 #clf1.predict(xgb.DMatrix(X))
 math.sqrt(mean_squared_error(Y[60000:], clf1.predict(X[60000:])))
 
-Ypred = [0.35 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
-Ypred = numpy.add(Ypred, [0.35 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.3 * y[0] for y in model1.predict(Xtest)])
-#Ypred = numpy.add(Ypred, [0.15 * y[0] for y in model2.predict(Xtest)])
+
+#Xoutput2 = np.column_stack((model1.predict(Xtest), clf1.predict(Xtest), clf2.predict(Xtest)))
+#Ypred = model2.predict(Xoutput2)
+Ypred = [0.25 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
+Ypred = numpy.add(Ypred, [0.25 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.25 * y for y in clf3.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.25 * y[0] for y in model1.predict(Xtest)])
+#Ypred = numpy.add(Ypred, [0.1 * y[0] for y in model2.predict(Xtest)])
 id_test = raw_test['id']
 pandas.DataFrame({"id": id_test, "relevance": Ypred}).to_csv('submission.csv',index=False)
 
