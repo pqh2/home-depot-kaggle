@@ -176,19 +176,30 @@ model1.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 
 model2 = build_model(len(X[0]), 64, 0.35, 2, 'glorot_normal')
 model2.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
-#rfc = RandomForestRegressor(n_estimators=100, min_samples_split=10)
-#rfc.fit(X, Y)
+rfc = RandomForestRegressor(n_estimators=1000, min_samples_split=20)
+rfc.fit(X, Y)
+
+param_grid = {
+    'n_estimators': [1000],
+    "min_samples_split": [20],
+}
+
+CV_rfc = GridSearchCV(estimator=rfc, param_grid=param_grid, cv= 5, n_jobs=4)
+
+CV_rfc.fit(X, Y)
+
+
 
 
 # Classifier
 model2 = xgb.XGBRegressor()
 params = {
-        'n_estimators': [650, 675, 700],
-        'learning_rate': [0.04, 0.05],
-        'max_depth': [9, 10, 11],
-         'subsample': [0.8, 0.85, 0.9],
-        'colsample_bylevel': [0.65, 0.75, 0.8],
-        'colsample_bytree': [0.65, 0.7]
+        'n_estimators': [645, 650, 655],
+        'learning_rate': [0.04],
+        'max_depth': [10],
+         'subsample': [0.9, 0.92, 0.93],
+        'colsample_bylevel': [0.75],
+        'colsample_bytree': [0.7, 0.72]
 }
 clf1 = GridSearchCV(model2, params, verbose=1, n_jobs = 4, cv=7)
 clf1.fit(X, Y)
@@ -234,8 +245,6 @@ Xoutput = np.column_stack((model1.predict(X), clf1.predict(X), clf2.predict(X)))
 model2 = build_model(len(Xoutput[0]), 16, 0.85, 1, 'glorot_normal')
 model2.fit(Xoutput, Y, nb_epoch=32, batch_size=32, verbose=2)
 
-
-
 num_boost_round = 400
 dtrain = xgb.DMatrix(X, Y)
 best_params = {'colsample_bytree': 0.78, 'colsample_bylevel': 0.9, 'learning_rate': 0.05, 'min_child_weight': 3, 'n_estimators': 136, 'subsample': 0.88, 'max_depth': 9}
@@ -247,10 +256,11 @@ math.sqrt(mean_squared_error(Y[60000:], clf1.predict(X[60000:])))
 
 #Xoutput2 = np.column_stack((model1.predict(Xtest), clf1.predict(Xtest), clf2.predict(Xtest)))
 #Ypred = model2.predict(Xoutput2)
-Ypred = [0.25 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
-Ypred = numpy.add(Ypred, [0.25 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.25 * y for y in clf3.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.25 * y[0] for y in model1.predict(Xtest)])
+Ypred = [0.5 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
+#Ypred = numpy.add(Ypred, [0.4 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
+#Ypred = numpy.add(Ypred, [0.2 * y for y in clf3.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.35 * y for y in rfc.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.15 * y[0] for y in model1.predict(Xtest)])
 #Ypred = numpy.add(Ypred, [0.1 * y[0] for y in model2.predict(Xtest)])
 id_test = raw_test['id']
 pandas.DataFrame({"id": id_test, "relevance": Ypred}).to_csv('submission.csv',index=False)
