@@ -4,6 +4,7 @@ import gzip
 import numpy as np
 ###
 from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
 from sklearn.grid_search import GridSearchCV
 from sklearn.ensemble import BaggingRegressor
 from keras.layers.advanced_activations import PReLU, LeakyReLU
@@ -56,6 +57,27 @@ def words_in_common(words1, words2):
         sum += 1 * (math.log(num_documents / documents_its_in[word1]))
     return sum
 
+def two_grams_matching(search, dest):
+    ct = 0
+    for i in range(len(search) - 1):
+        for j in range(len(dest) - 1):
+            if dest[j].find(search[i]) >= 0 and dest[j+1].find(search[i+1]) >= 0:
+                w1 = math.log(num_documents / documents_its_in[search[i]]) if search[i] in documents_its_in else 1
+                w2 = math.log(num_documents / documents_its_in[search[i+1]]) if search[i + 1] in documents_its_in else 1
+                ct += w1 * w2
+    return ct
+
+def three_grams_matching(search, dest):
+    ct = 0
+    for i in range(len(search) - 2):
+        for j in range(len(dest) - 2):
+            if dest[j].find(search[i]) >= 0 and dest[j+1].find(search[i+1]) >= 0 and dest[j+2].find(search[i+2]) >= 0:
+                w1 = math.log(num_documents / documents_its_in[search[i]]) if search[i] in documents_its_in else 1
+                w2 = math.log(num_documents / documents_its_in[search[i+1]]) if search[i + 1] in documents_its_in else 1
+                w3 = math.log(num_documents / documents_its_in[search[i+2]]) if search[i + 2] in documents_its_in else 1
+                ct += math.sqrt(w1 * w2 * w3)
+    return ct
+
 def word_to_vec_score(words1, words2):
     sum = 0
     for word1 in words1:
@@ -92,6 +114,7 @@ def weighted_count(words1, words2):
     return sm
 
 
+
 def generate_features(raw_train):
     X = []
     # Create features
@@ -99,34 +122,43 @@ def generate_features(raw_train):
     for it, row in raw_train.iterrows():
         data_point = []
         pd_id = row['product_uid']
-        data_point.append(len(row['search_term']))
-        data_point.append(len(row['product_title']))
+        data_point.append(math.sqrt(len(descr_dict[pd_id])))
         search_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['search_term'].split() if stemmer.stem(word)]
         search_stemmed = ['in.' if w == 'inch' else w for w in search_stemmed]
         search_stemmed = ['ft.' if w == 'feet' else w for w in search_stemmed]
+        search_stemmed = [w for w in search_stemmed if w not in stopwords]
+        data_point.append(len(search_stemmed))
+        data_point.append(len(row['search_term']))
         #search_stemmed = ['lb.' if w == 'pound' else w for w in search_stemmed]
         title_stemmed = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_title'].split() if stemmer.stem(word)]
         title_stemmed = ['in.' if w == 'inch' else w for w in title_stemmed]
         title_stemmed = ['ft.' if w == 'feet' else w for w in title_stemmed]
+        data_point.append(len(title_stemmed))
+        data_point.append(len(row['product_title']))
         title_before_with = []
         for w in title_stemmed:
             title_before_with.append(w)
             if w == 'with':
                 break
         #title_stemmed = ['lb.' if w == 'pound' else w for w in title_stemmed]
-        data_point.append(word_to_vec_score(search_stemmed, title_stemmed) / len(search_stemmed))
+        data_point.append(word_to_vec_score(search_stemmed, title_stemmed) / (len(search_stemmed) + 1))
         data_point.append(words_in_common(search_stemmed, title_before_with) - len(search_stemmed))
         data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]) - len(search_stemmed))
         #data_point.append(words_in_common(search_stemmed, title_before_with) / len(search_stemmed))
-        data_point.append(words_in_common(search_stemmed, title_stemmed) / len(search_stemmed))
-        data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]) / len(search_stemmed))
+        data_point.append(words_in_common(search_stemmed, title_stemmed) / (len(search_stemmed) + 1))
+        data_point.append(words_in_common(search_stemmed, descr_dict[pd_id]) / (len(search_stemmed) + 1))
         data_point.append(edit_dist_less_two(search_stemmed, title_stemmed))
         data_point.append(edit_dist_less_two(search_stemmed, descr_dict[pd_id]))
-        data_point.append(1 if search_stemmed[-1] in title_stemmed else 0)
+        if len(search_stemmed) == 0:
+            data_point.append(0)
+        else:
+            data_point.append(1 if search_stemmed[-1] in title_stemmed else 0)
         data_point.append(weighted_count(search_stemmed, descr_dict[pd_id]))
         search_joined = "".join([word for word in search_stemmed])
         title_joined = "".join([word for word in title_stemmed])
         data_point.append(len(search_stemmed) if (title_joined.find(search_joined) >= 0 and len(search_stemmed) > 1) else 0)
+        data_point.append(two_grams_matching(search_stemmed, title_stemmed))
+        #data_point.append(three_grams_matching(search_stemmed, title_stemmed))
         X.append(data_point)
     X = numpy.array(X)
     return X
@@ -137,7 +169,6 @@ raw_train = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/trai
 descriptions_raw = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/product_descriptions.csv", encoding="ISO-8859-1")
 raw_test = pandas.read_csv("/Users/patrickhess/Documents/kaggle/home_depot/test.csv", encoding="ISO-8859-1")
 
-# Stem descriptions
 for it, row in descriptions_raw.iterrows():
     words = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
     words = ['in.' if w == 'inch' else w for w in words]
@@ -153,9 +184,7 @@ for it, row in descriptions_raw.iterrows():
         x.add(w)
     num_documents += 1
 
-# Stem descriptions
-for it, row in descriptions_raw.iterrows():
-    descr_dict[row['product_uid']] = [''.join(e for e in stemmer.stem(word) if e.isalnum()) for word in row['product_description'].split()]
+
 
 X = generate_features(raw_train)
 Xtest = generate_features(raw_test)
@@ -189,9 +218,9 @@ model2.fit(X, Y, nb_epoch=32, batch_size=84, verbose=2)
 rfc1 = RandomForestRegressor(n_estimators=1200, min_samples_split=20, max_depth=50)
 rfc1.fit(X, Y)
 param_grid = {
-    'n_estimators': [1200],
-    "min_samples_split": [20],
-    'max_depth': [50]
+    'n_estimators': [400, 800, 1200, 1400],
+    "min_samples_split": [10, 20, 40],
+    'max_depth': [25, 50, 100]
 }
 
 CV_rfc = GridSearchCV(estimator=rfc1, param_grid=param_grid, cv= 5, n_jobs=4)
@@ -199,27 +228,27 @@ CV_rfc = GridSearchCV(estimator=rfc1, param_grid=param_grid, cv= 5, n_jobs=4)
 CV_rfc.fit(X, Y)
 
 
-
-
+#xgb.cv({'colsample_bytree': 0.7, 'colsample_bylevel': 0.9, 'learning_rate': 0.01, 'min_child_weight': 1, 'n_estimators': 7500, 'subsample': 0.9, 'max_depth': 7},
 # Classifier
-model2 = xgb.XGBRegressor()
+xgbmodel = xgb.XGBRegressor()
 params = {
-        'n_estimators': [250, 500, 750],
-        'learning_rate': [0.03, 0.04, 0.05],
-        'max_depth': [8, 10, 11, 12],
-         'subsample': [0.8, 0.93],
-        'colsample_bylevel': [0.65, 0.75, 0.85],
-        'colsample_bytree': [0.6, 0.7, 0.8]
+        'n_estimators': [775, 800, 825],
+        'learning_rate': [0.02, 0.03],
+        'max_depth': [10, 11, 12],
+        'subsample': [0.93],
+        'colsample_bylevel': [0.65],
+        'colsample_bytree': [0.59],
+        'min_child_weight':  [2],
 }
 
-#best_params = {'colsample_bytree': 0.7, 'colsample_bylevel': 0.75, 'learning_rate': 0.04, 'n_estimators': 500, 'subsample': 0.93, 'max_depth': 10}
-clf1 = GridSearchCV(model2, params, verbose=1, n_jobs = 4, cv=7)
+#{'colsample_bytree': 0.59, 'colsample_bylevel': 0.65, 'learning_rate': 0.02, 'n_estimators': 800, 'subsample': 0.93, 'max_depth': 11}
+clf1 = GridSearchCV(xgbmodel, params, verbose=1, n_jobs = 4, cv=5)
 clf1.fit(X, Y)
 print(clf1.best_score_)
 print(clf1.best_params_)
 
 
-model2 = xgb.XGBRegressor()
+xgbmodel = xgb.XGBRegressor()
 params = {
         'n_estimators': [700, 800, 900],
         'learning_rate': [0.04],
@@ -228,10 +257,45 @@ params = {
         'colsample_bylevel': [0.75],
         'colsample_bytree': [0.7]
 }
-clf2 = GridSearchCV(model2, params, verbose=1, n_jobs = 4, cv=7)
+
+
+clf2 = GridSearchCV(xgbmodel, params, verbose=1, n_jobs = 4, cv=7)
 clf2.fit(X, Y)
 print(clf2.best_score_)
 print(clf2.best_params_)
+
+
+xgbmodel = xgb.XGBRegressor()
+params = {
+        'n_estimators': [250, 500, 750],
+        'learning_rate': [0.04],
+        'max_depth': [10],
+         'subsample': [0.9],
+        'colsample_bylevel': [0.75],
+        'colsample_bytree': [0.7]
+}
+clf3 = GridSearchCV(xgbmodel, params, verbose=1, n_jobs = 4, cv=7)
+clf3.fit(X, Y)
+print(clf3.best_score_)
+print(clf3.best_params_)
+
+
+xgbmodel = xgb.XGBRegressor()
+params = {
+        'n_estimators': [250, 500, 750],
+        'learning_rate': [0.04],
+        'max_depth': [8],
+         'subsample': [0.9],
+        'colsample_bylevel': [0.75],
+        'colsample_bytree': [0.7]
+}
+clf4 = GridSearchCV(xgbmodel, params, verbose=1, n_jobs = 4, cv=7)
+clf4.fit(X, Y)
+print(clf4.best_score_)
+print(clf4.best_params_)
+
+
+
 
 """
 # Classifier
@@ -267,11 +331,11 @@ print(clf3.best_score_)
 print(clf3.best_params_)
 """
 
-Xblended = np.column_stack((clf1.predict(X), clf2.predict(X), rfc1.predict(X)))
+Xblended = np.column_stack((clf1.predict(X), clf2.predict(X), clf3.predict(X), clf4.predict(X), rfc1.predict(X), model1.predict(X), model2.predict(X)))
 
-rfc2 = RandomForestRegressor(n_estimators=100)
+rfc2 = RandomForestRegressor(n_estimators=500)
 rfc2.fit(Xblended, Y)
-linModel = LinearRegression()
+linModel = Ridge()
 linModel.fit(Xblended, Y)
 num_boost_round = 400
 dtrain = xgb.DMatrix(X, Y)
@@ -282,17 +346,19 @@ clf1 = xgb.train(params=best_params, dtrain=dtrain, num_boost_round=num_boost_ro
 math.sqrt(mean_squared_error(Y[60000:], rfc1.predict(X[60000:])))
 
 
-Xblended = np.column_stack((clf1.predict(Xtest), clf2.predict(Xtest), rfc1.predict(Xtest)))
-Ypred = linModel.predict(Xblended)
-Ypred2 = rfc2.predict(Xblended)
+Xblended = np.column_stack((clf1.predict(Xtest), clf2.predict(Xtest), clf3.predict(Xtest), clf4.predict(Xtest), rfc1.predict(Xtest), model1.predict(Xtest), model2.predict(Xtest)))
+#Ypred = linModel.predict(Xblended)
+Ypred = rfc2.predict(Xblended)
 #Xoutput2 = np.column_stack((model1.predict(Xtest), clf1.predict(Xtest), clf2.predict(Xtest)))
 #Ypred = model2.predict(Xoutput2)
 Ypred = [0.3 * max(1, min(3, y)) for y in clf1.predict(Xtest)]
-Ypred = numpy.add(Ypred, [0.1 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.07 * max(1, min(3, y)) for y in clf2.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.07 * max(1, min(3, y)) for y in clf3.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.06 * max(1, min(3, y)) for y in clf4.predict(Xtest)])
 #Ypred = numpy.add(Ypred, [0.2 * y for y in clf3.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.4 * y for y in rfc1.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.1 * y[0] for y in model1.predict(Xtest)])
-Ypred = numpy.add(Ypred, [0.1 * y[0] for y in model2.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.3 * y for y in rfc1.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.09 * y[0] for y in model1.predict(Xtest)])
+Ypred = numpy.add(Ypred, [0.11 * y[0] for y in model2.predict(Xtest)])
 #Ypred = numpy.add(Ypred, [0.1 * y[0] for y in model2.predict(Xtest)])
 id_test = raw_test['id']
 pandas.DataFrame({"id": id_test, "relevance": Ypred}).to_csv('submission.csv',index=False)
